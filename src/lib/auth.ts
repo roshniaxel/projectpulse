@@ -1,44 +1,18 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
-import Credentials from "next-auth/providers/credentials";
-import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "./prisma";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PrismaAdapter(prisma),
+  // JWT sessions — no database needed for session management
+  // Works on edge runtime (middleware) without Prisma
   session: { strategy: "jwt" },
   providers: [
-    // Google OAuth — for production
-    ...(process.env.GOOGLE_CLIENT_ID
-      ? [
-          Google({
-            clientId: process.env.GOOGLE_CLIENT_ID,
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-          }),
-        ]
-      : []),
-
-    // Email login — for dev/demo (no OAuth setup needed)
-    Credentials({
-      name: "Email",
-      credentials: {
-        email: { label: "Email", type: "email" },
-        name: { label: "Name", type: "text" },
-      },
-      async authorize(credentials) {
-        const email = credentials.email as string;
-        const name = credentials.name as string;
-        if (!email) return null;
-
-        // Find or create user in database
-        let user = await prisma.user.findUnique({ where: { email } });
-        if (!user) {
-          user = await prisma.user.create({
-            data: { email, name: name || email.split("@")[0] },
-          });
-        }
-
-        return { id: user.id, email: user.email, name: user.name, image: user.image };
+    Google({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      authorization: {
+        params: {
+          prompt: "select_account",
+        },
       },
     }),
   ],
@@ -58,15 +32,25 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (!isLoggedIn && !isOnLogin) return false;
       return true;
     },
-    jwt({ token, user }) {
+    jwt({ token, user, profile }) {
       if (user) {
         token.id = user.id;
+        token.email = user.email;
+        token.name = user.name;
+        token.picture = user.image;
+      }
+      if (profile) {
+        token.name = profile.name;
+        token.picture = profile.picture as string;
       }
       return token;
     },
     session({ session, token }) {
-      if (session.user && token.id) {
-        session.user.id = token.id as string;
+      if (session.user) {
+        session.user.id = token.id as string || token.sub || "";
+        session.user.email = token.email as string;
+        session.user.name = token.name as string;
+        session.user.image = token.picture as string;
       }
       return session;
     },
