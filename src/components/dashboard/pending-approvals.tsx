@@ -28,6 +28,7 @@ import { SOURCE_COLORS, SOURCE_NAMES } from "@/lib/constants";
 import { formatRelativeTime } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import { useProject } from "@/contexts/project-context";
+import { useIntegrations } from "@/contexts/integrations-context";
 import type { PendingTimeEntry, PushResult, IntegrationSource } from "@/lib/types";
 
 const TYPE_ICONS: Record<string, React.ElementType> = {
@@ -47,6 +48,7 @@ function formatDuration(minutes: number): string {
 
 export function PendingApprovals() {
   const { selectedProject } = useProject();
+  const { connectedSources } = useIntegrations();
   const [allEntries, setAllEntries] = useState<PendingTimeEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isPushing, setIsPushing] = useState(false);
@@ -67,16 +69,19 @@ export function PendingApprovals() {
     }
   }, []);
 
-  // Filter by selected project
+  // Filter by connected sources first, then by selected project
+  const connectedEntries = allEntries.filter((e) =>
+    connectedSources.includes(e.source as IntegrationSource)
+  );
   const entries = selectedProject
-    ? allEntries.filter((e) => {
+    ? connectedEntries.filter((e) => {
         const key = selectedProject.key;
         const name = selectedProject.name.toLowerCase();
         if (e.ticketKey && e.ticketKey.startsWith(key + "-")) return true;
         if (e.project && (name.includes(e.project.toLowerCase()) || e.project.toLowerCase().includes(name))) return true;
         return false;
       })
-    : allEntries;
+    : connectedEntries;
 
   useEffect(() => {
     fetchEntries();

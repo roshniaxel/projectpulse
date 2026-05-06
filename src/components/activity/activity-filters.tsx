@@ -5,7 +5,7 @@ import { SOURCE_COLORS, SOURCE_NAMES } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type { IntegrationSource } from "@/lib/types";
 
-const SOURCES: IntegrationSource[] = [
+const ALL_SOURCES: IntegrationSource[] = [
   "jira",
   "github",
   "google_calendar",
@@ -18,12 +18,15 @@ const SOURCES: IntegrationSource[] = [
 interface ActivityFiltersProps {
   selectedSources: IntegrationSource[];
   onToggleSource: (source: IntegrationSource) => void;
+  availableSources?: IntegrationSource[];
 }
 
 export function ActivityFilters({
   selectedSources,
   onToggleSource,
+  availableSources,
 }: ActivityFiltersProps) {
+  const sources = availableSources || ALL_SOURCES;
   const allSelected = selectedSources.length === 0;
 
   return (
@@ -35,8 +38,7 @@ export function ActivityFilters({
         variant={allSelected ? "default" : "outline"}
         size="sm"
         onClick={() => {
-          // Clear all filters to show all
-          SOURCES.forEach((s) => {
+          sources.forEach((s) => {
             if (selectedSources.includes(s)) onToggleSource(s);
           });
         }}
@@ -44,7 +46,7 @@ export function ActivityFilters({
       >
         All
       </Button>
-      {SOURCES.map((source) => {
+      {sources.map((source) => {
         const colors = SOURCE_COLORS[source];
         const isActive = selectedSources.includes(source);
         return (

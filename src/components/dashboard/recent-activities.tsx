@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { MOCK_ACTIVITIES } from "@/lib/mock-data";
 import { SOURCE_COLORS, SOURCE_NAMES } from "@/lib/constants";
 import { formatTime } from "@/lib/utils";
+import { useIntegrations } from "@/contexts/integrations-context";
 import type { ActivityType } from "@/lib/types";
 
 const ICON_MAP: Record<ActivityType, React.ElementType> = {
@@ -39,7 +40,9 @@ const ICON_MAP: Record<ActivityType, React.ElementType> = {
 };
 
 export function RecentActivities() {
+  const { connectedSources } = useIntegrations();
   const recentActivities = [...MOCK_ACTIVITIES]
+    .filter((a) => connectedSources.includes(a.source))
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     .slice(0, 5);
 

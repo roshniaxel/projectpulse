@@ -1,29 +1,54 @@
 "use client";
 
+import { toast } from "sonner";
 import { IntegrationCard } from "@/components/settings/integration-card";
 import { MavenlinkMapping } from "@/components/settings/mavenlink-mapping";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Shield } from "lucide-react";
-import { MOCK_INTEGRATIONS } from "@/lib/mock-data";
+import { useIntegrations } from "@/contexts/integrations-context";
+import type { IntegrationSource } from "@/lib/types";
+import { SOURCE_NAMES } from "@/lib/constants";
 
 export default function SettingsPage() {
+  const { integrations, connect, disconnect } = useIntegrations();
+
+  const handleConnect = (source: IntegrationSource) => {
+    connect(source);
+    toast.success(`${SOURCE_NAMES[source]} connected`, {
+      description: "Activities from this tool will now appear in your dashboard",
+    });
+  };
+
+  const handleDisconnect = (source: IntegrationSource) => {
+    disconnect(source);
+    toast.info(`${SOURCE_NAMES[source]} disconnected`);
+  };
+
   return (
     <div className="space-y-6">
       {/* Integrations */}
       <div>
         <h2 className="text-lg font-semibold mb-1">Integrations</h2>
         <p className="text-sm text-muted-foreground mb-4">
-          Connect your tools to capture activities automatically
+          Connect your tools to capture activities automatically.
+          Only connected tools will show data in your dashboard and timesheet.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {MOCK_INTEGRATIONS.map((integration) => (
-            <IntegrationCard key={integration.id} integration={integration} />
+          {integrations.map((integration) => (
+            <IntegrationCard
+              key={integration.id}
+              integration={integration}
+              onConnect={() => handleConnect(integration.source)}
+              onDisconnect={() => handleDisconnect(integration.source)}
+            />
           ))}
         </div>
       </div>
 
-      {/* Mavenlink Mapping */}
-      <MavenlinkMapping />
+      {/* Mavenlink Mapping — only show if Mavenlink is connected */}
+      {integrations.find((i) => i.source === "mavenlink")?.connected && (
+        <MavenlinkMapping />
+      )}
 
       {/* Data & Privacy */}
       <Card>
