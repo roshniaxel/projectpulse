@@ -139,6 +139,15 @@ export class MockJiraConnector implements IJiraConnector {
     return MOCK_PROJECTS;
   }
 
+  async fetchAssignedProjects(): Promise<JiraProject[]> {
+    return MOCK_PROJECTS;
+  }
+
+  async getTicketSummary(ticketKey: string): Promise<string | null> {
+    const t = MOCK_TICKETS.find((x) => x.key === ticketKey);
+    return t?.summary ?? null;
+  }
+
   async fetchTickets(params: {
     projectKey: string;
     status?: string[];

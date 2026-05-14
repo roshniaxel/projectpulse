@@ -68,7 +68,9 @@ export function TopBar() {
 
         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
         <div className="hidden sm:block ml-3">
-          <ProjectSelector />
+          <Suspense fallback={null}>
+            <ProjectSelector />
+          </Suspense>
         </div>
       </div>
 

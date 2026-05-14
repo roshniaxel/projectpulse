@@ -130,7 +130,7 @@ function ProductivityInsightsInner() {
                     borderRadius: "8px",
                     border: "1px solid #e5e7eb",
                   }}
-                  formatter={(value: number) => [`${value}h`, ""]}
+                  formatter={(value) => [`${value}h`, ""]}
                 />
               </PieChart>
             </ResponsiveContainer>
