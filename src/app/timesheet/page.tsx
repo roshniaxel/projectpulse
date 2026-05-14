@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { Suspense, useCallback, useEffect, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   CheckCircle,
   RotateCcw,
@@ -21,7 +22,19 @@ import { JiraLogButton } from "@/components/timesheet/jira-log-button";
 import { formatDate, formatHours } from "@/lib/utils";
 
 export default function TimesheetPage() {
+  return (
+    <Suspense
+      fallback={<div className="text-sm text-muted-foreground">Loading…</div>}
+    >
+      <TimesheetPageInner />
+    </Suspense>
+  );
+}
+
+function TimesheetPageInner() {
   const { selectedProject } = useProject();
+  const searchParams = useSearchParams();
+  const queryString = searchParams.toString();
   const {
     state,
     entries,
@@ -72,10 +85,14 @@ export default function TimesheetPage() {
     });
   };
 
+  const handleGenerate = useCallback(() => {
+    generate(queryString);
+  }, [generate, queryString]);
+
   // Idle & Generating states
   if (state === "idle" || state === "generating") {
     return (
-      <GenerateButton state={state} steps={steps} onGenerate={generate} />
+      <GenerateButton state={state} steps={steps} onGenerate={handleGenerate} />
     );
   }
 

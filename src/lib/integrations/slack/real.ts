@@ -1,28 +1,31 @@
 import type { Activity } from "@/lib/types";
 import type { ISlackConnector } from "./connector";
 
-const BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
-
-async function slackFetch(method: string, params?: Record<string, string>) {
-  const url = new URL(`https://slack.com/api/${method}`);
-  if (params) {
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  }
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${BOT_TOKEN}` },
-  });
-  if (!res.ok) throw new Error(`Slack API error: ${res.status}`);
-  const data = await res.json();
-  if (!data.ok) throw new Error(`Slack error: ${data.error}`);
-  return data;
-}
+export type SlackCreds = { botToken: string };
 
 export class RealSlackConnector implements ISlackConnector {
   readonly source = "slack" as const;
+  private botToken: string;
+
+  constructor(creds: SlackCreds) {
+    this.botToken = creds.botToken;
+  }
+
+  private async fetch(method: string, params?: Record<string, string>) {
+    const url = new URL(`https://slack.com/api/${method}`);
+    if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${this.botToken}` },
+    });
+    if (!res.ok) throw new Error(`Slack API error: ${res.status}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(`Slack error: ${data.error}`);
+    return data;
+  }
 
   async testConnection() {
     try {
-      await slackFetch("auth.test");
+      await this.fetch("auth.test");
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
@@ -30,7 +33,7 @@ export class RealSlackConnector implements ISlackConnector {
   }
 
   async fetchChannels(): Promise<Array<{ id: string; name: string }>> {
-    const data = await slackFetch("conversations.list", {
+    const data = await this.fetch("conversations.list", {
       types: "public_channel,private_channel",
       limit: "100",
     });
@@ -40,17 +43,14 @@ export class RealSlackConnector implements ISlackConnector {
     }));
   }
 
-  async fetchActivities(params: {
-    since: string;
-  }): Promise<Activity[]> {
+  async fetchActivities(params: { since: string }): Promise<Activity[]> {
     const channels = await this.fetchChannels();
     const oldest = String(new Date(params.since).getTime() / 1000);
     const activities: Activity[] = [];
 
-    // Fetch from up to 5 channels to avoid rate limits
     for (const channel of channels.slice(0, 5)) {
       try {
-        const data = await slackFetch("conversations.history", {
+        const data = await this.fetch("conversations.history", {
           channel: channel.id,
           oldest,
           limit: "20",
@@ -75,7 +75,7 @@ export class RealSlackConnector implements ISlackConnector {
           });
         }
       } catch {
-        // Skip channels we can't read
+        // skip
       }
     }
 

@@ -1,58 +1,58 @@
 import NextAuth from "next-auth";
-import Google from "next-auth/providers/google";
+import { authConfig } from "./auth.config";
+import { prisma } from "./prisma";
+import { encrypt } from "./crypto";
 
+// Full NextAuth instance used by API route handlers (Node runtime).
+// Adds the `signIn` callback that captures the user's Google tokens into
+// our Prisma DB — that step needs the Node `crypto` module to encrypt
+// the tokens, so it can't live in the edge-safe config.
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  // JWT sessions — no database needed for session management
-  // Works on edge runtime (middleware) without Prisma
-  session: { strategy: "jwt" },
-  providers: [
-    Google({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      authorization: {
-        params: {
-          prompt: "select_account",
-        },
-      },
-    }),
-  ],
-  pages: {
-    signIn: "/login",
-  },
+  ...authConfig,
   callbacks: {
-    authorized({ auth: session, request }) {
-      const isLoggedIn = !!session?.user;
-      const isOnLogin = request.nextUrl.pathname.startsWith("/login");
-      const isApiAuth = request.nextUrl.pathname.startsWith("/api/auth");
+    ...authConfig.callbacks,
+    async signIn({ user, account }) {
+      if (account?.provider === "google" && user?.email) {
+        try {
+          const dbUser = await prisma.user.upsert({
+            where: { email: user.email },
+            update: { name: user.name, image: user.image },
+            create: { email: user.email, name: user.name, image: user.image },
+          });
 
-      if (isApiAuth) return true;
-      if (isOnLogin && isLoggedIn) {
-        return Response.redirect(new URL("/", request.nextUrl));
+          const accessToken = account.access_token;
+          const refreshToken = account.refresh_token;
+
+          if (accessToken) {
+            const meta: Record<string, string | number> = {};
+            if (refreshToken) meta.refreshToken = refreshToken;
+            if (account.expires_at) meta.expiresAt = account.expires_at;
+
+            await prisma.userIntegration.upsert({
+              where: {
+                userId_source: { userId: dbUser.id, source: "google_calendar" },
+              },
+              update: {
+                connected: true,
+                accessToken: encrypt(accessToken),
+                metadata: { enc: encrypt(JSON.stringify(meta)) },
+                connectedAt: new Date(),
+              },
+              create: {
+                userId: dbUser.id,
+                source: "google_calendar",
+                connected: true,
+                accessToken: encrypt(accessToken),
+                metadata: { enc: encrypt(JSON.stringify(meta)) },
+                connectedAt: new Date(),
+              },
+            });
+          }
+        } catch {
+          // Don't block sign-in if integration upsert fails.
+        }
       }
-      if (!isLoggedIn && !isOnLogin) return false;
       return true;
-    },
-    jwt({ token, user, profile }) {
-      if (user) {
-        token.id = user.id;
-        token.email = user.email;
-        token.name = user.name;
-        token.picture = user.image;
-      }
-      if (profile) {
-        token.name = profile.name;
-        token.picture = profile.picture as string;
-      }
-      return token;
-    },
-    session({ session, token }) {
-      if (session.user) {
-        session.user.id = token.id as string || token.sub || "";
-        session.user.email = token.email as string;
-        session.user.name = token.name as string;
-        session.user.image = token.picture as string;
-      }
-      return session;
     },
   },
 });

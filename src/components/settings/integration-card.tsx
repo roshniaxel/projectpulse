@@ -29,17 +29,25 @@ const SOURCE_ICONS: Record<IntegrationSource, React.ElementType> = {
 
 interface IntegrationCardProps {
   integration: Integration;
+  connectMethod?: "oauth_redirect" | "auto_with_signin" | "paste_token";
   onConnect?: () => void;
   onDisconnect?: () => void;
 }
 
 export function IntegrationCard({
   integration,
+  connectMethod = "paste_token",
   onConnect,
   onDisconnect,
 }: IntegrationCardProps) {
   const Icon = SOURCE_ICONS[integration.source];
   const colors = SOURCE_COLORS[integration.source];
+  const connectLabel =
+    connectMethod === "oauth_redirect"
+      ? "Connect with OAuth"
+      : connectMethod === "auto_with_signin"
+      ? "Auto-connected"
+      : "Connect";
 
   return (
     <Card>
@@ -98,7 +106,7 @@ export function IntegrationCard({
               </Button>
             ) : (
               <Button size="sm" onClick={onConnect} className="text-xs">
-                Connect
+                {connectLabel}
               </Button>
             )}
           </div>

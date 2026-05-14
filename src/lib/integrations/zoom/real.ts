@@ -1,66 +1,72 @@
 import type { Activity } from "@/lib/types";
 import type { IZoomConnector, ZoomMeeting } from "./connector";
 
-const ACCOUNT_ID = process.env.ZOOM_ACCOUNT_ID || "";
-const CLIENT_ID = process.env.ZOOM_CLIENT_ID || "";
-const CLIENT_SECRET = process.env.ZOOM_CLIENT_SECRET || "";
-
-let cachedToken: { token: string; expiresAt: number } | null = null;
-
-async function getAccessToken(): Promise<string> {
-  if (cachedToken && Date.now() < cachedToken.expiresAt) {
-    return cachedToken.token;
-  }
-
-  const credentials = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
-  const res = await fetch("https://zoom.us/oauth/token", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      grant_type: "account_credentials",
-      account_id: ACCOUNT_ID,
-    }),
-  });
-
-  if (!res.ok) throw new Error(`Zoom auth failed: ${res.status}`);
-  const data = await res.json();
-
-  cachedToken = {
-    token: data.access_token,
-    expiresAt: Date.now() + (data.expires_in - 60) * 1000,
-  };
-
-  return cachedToken.token;
-}
-
-async function zoomFetch(path: string) {
-  const token = await getAccessToken();
-  const res = await fetch(`https://api.zoom.us/v2${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error(`Zoom API error: ${res.status} ${res.statusText}`);
-  return res.json();
-}
+export type ZoomCreds = {
+  accountId: string;
+  clientId: string;
+  clientSecret: string;
+};
 
 export class RealZoomConnector implements IZoomConnector {
   readonly source = "zoom" as const;
+  private creds: ZoomCreds;
+  private cachedToken: { token: string; expiresAt: number } | null = null;
+
+  constructor(creds: ZoomCreds) {
+    this.creds = creds;
+  }
+
+  private async accessToken(): Promise<string> {
+    if (this.cachedToken && Date.now() < this.cachedToken.expiresAt) {
+      return this.cachedToken.token;
+    }
+    const credentials = Buffer.from(
+      `${this.creds.clientId}:${this.creds.clientSecret}`
+    ).toString("base64");
+    const res = await fetch("https://zoom.us/oauth/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "account_credentials",
+        account_id: this.creds.accountId,
+      }),
+    });
+    if (!res.ok) throw new Error(`Zoom auth failed: ${res.status}`);
+    const data = await res.json();
+    this.cachedToken = {
+      token: data.access_token,
+      expiresAt: Date.now() + (data.expires_in - 60) * 1000,
+    };
+    return data.access_token;
+  }
+
+  private async fetch(path: string) {
+    const token = await this.accessToken();
+    const res = await fetch(`https://api.zoom.us/v2${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Zoom API error: ${res.status} ${res.statusText}`);
+    return res.json();
+  }
 
   async testConnection() {
     try {
-      await zoomFetch("/users/me");
+      await this.fetch("/users/me");
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
     }
   }
 
-  async fetchPastMeetings(params: { from: string; to?: string }): Promise<ZoomMeeting[]> {
+  async fetchPastMeetings(params: {
+    from: string;
+    to?: string;
+  }): Promise<ZoomMeeting[]> {
     const to = params.to || new Date().toISOString().split("T")[0];
-    // Get user's past meetings
-    const data = await zoomFetch(
+    const data = await this.fetch(
       `/users/me/meetings?type=previous_meetings&from=${params.from}&to=${to}&page_size=30`
     );
 
@@ -76,7 +82,6 @@ export class RealZoomConnector implements IZoomConnector {
 
   async fetchActivities(params: { since: string }): Promise<Activity[]> {
     const meetings = await this.fetchPastMeetings({ from: params.since });
-
     return meetings.map((m) => ({
       id: `zoom-${m.id}`,
       source: "zoom" as const,

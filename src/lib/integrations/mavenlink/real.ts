@@ -2,31 +2,40 @@ import type { TimeEntry, PushResult } from "@/lib/types";
 import type { IMavenlinkConnector } from "./connector";
 import type { MavenlinkWorkspace, MavenlinkProject } from "./types";
 
-const API_TOKEN = process.env.MAVENLINK_API_TOKEN || "";
-const BASE_URL = "https://api.mavenlink.com/api/v1";
+export type MavenlinkCreds = {
+  accountId: string;
+  apiToken: string;
+};
 
-async function mavenlinkFetch(path: string, options?: RequestInit) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${API_TOKEN}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`Mavenlink API error: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
-}
+const BASE_URL = "https://api.mavenlink.com/api/v1";
 
 export class RealMavenlinkConnector implements IMavenlinkConnector {
   readonly source = "mavenlink" as const;
+  private apiToken: string;
+
+  constructor(creds: MavenlinkCreds) {
+    this.apiToken = creds.apiToken;
+  }
+
+  private async fetch(path: string, options?: RequestInit) {
+    const res = await fetch(`${BASE_URL}${path}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${this.apiToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    });
+    if (!res.ok) {
+      throw new Error(`Mavenlink API error: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  }
 
   async testConnection() {
     try {
-      await mavenlinkFetch("/workspaces.json?per_page=1");
+      await this.fetch("/workspaces.json?per_page=1");
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
@@ -34,14 +43,11 @@ export class RealMavenlinkConnector implements IMavenlinkConnector {
   }
 
   async fetchWorkspaces(): Promise<MavenlinkWorkspace[]> {
-    const data = await mavenlinkFetch("/workspaces.json?per_page=50");
+    const data = await this.fetch("/workspaces.json?per_page=50");
     const workspaces = data.workspaces || {};
     return Object.values(workspaces).map((w: unknown) => {
       const ws = w as Record<string, unknown>;
-      return {
-        id: String(ws.id),
-        title: String(ws.title),
-      };
+      return { id: String(ws.id), title: String(ws.title) };
     });
   }
 
@@ -49,7 +55,7 @@ export class RealMavenlinkConnector implements IMavenlinkConnector {
     const path = workspaceId
       ? `/workspaces.json?per_page=50&include=sub_workspaces&only=${workspaceId}`
       : `/workspaces.json?per_page=50`;
-    const data = await mavenlinkFetch(path);
+    const data = await this.fetch(path);
     const workspaces = data.workspaces || {};
     return Object.values(workspaces).map((w: unknown) => {
       const ws = w as Record<string, unknown>;
@@ -72,9 +78,8 @@ export class RealMavenlinkConnector implements IMavenlinkConnector {
 
     for (const entry of entries) {
       if (entry.status === "rejected") continue;
-
       try {
-        const data = await mavenlinkFetch("/time_entries.json", {
+        const data = await this.fetch("/time_entries.json", {
           method: "POST",
           body: JSON.stringify({
             time_entry: {
@@ -85,15 +90,10 @@ export class RealMavenlinkConnector implements IMavenlinkConnector {
             },
           }),
         });
-
         const timeEntries = data.time_entries || {};
         const createdId = Object.keys(timeEntries)[0] || "unknown";
-
         results.pushed++;
-        results.externalIds.push({
-          entryId: entry.id,
-          externalId: createdId,
-        });
+        results.externalIds.push({ entryId: entry.id, externalId: createdId });
       } catch (e) {
         results.failed++;
         results.errors.push({

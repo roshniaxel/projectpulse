@@ -1,8 +1,12 @@
 import { type NextRequest } from "next/server";
 import { getMavenlinkConnector } from "@/lib/integrations/mavenlink";
+import { requireDbUser } from "@/lib/auth-helpers";
 import type { TimeEntry } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
+  const { user, unauthorized } = await requireDbUser();
+  if (unauthorized) return unauthorized;
+
   try {
     const body = await request.json();
     const entries: TimeEntry[] = body.entries;
@@ -11,7 +15,7 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "No entries provided" }, { status: 400 });
     }
 
-    const connector = getMavenlinkConnector();
+    const connector = await getMavenlinkConnector(user.id);
     const result = await connector.pushTimeEntries(entries);
     return Response.json(result);
   } catch (error) {

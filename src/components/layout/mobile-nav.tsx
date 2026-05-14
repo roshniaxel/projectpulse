@@ -9,11 +9,13 @@ import {
   Activity,
   Settings,
   Zap,
+  Timer,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
+  { label: "Tools Time", href: "/tools", icon: Timer },
   { label: "Timesheet", href: "/timesheet", icon: Clock },
   { label: "Alerts", href: "/alerts", icon: AlertTriangle },
   { label: "Activity", href: "/activity", icon: Activity },

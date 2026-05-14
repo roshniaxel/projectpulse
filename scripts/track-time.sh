@@ -1,155 +1,95 @@
 #!/bin/bash
-# ProjectPulse Active Time Tracker
-# Tracks ACTUAL working time — only counts intervals where Claude is
-# actively making tool calls. Idle gaps (user thinking, waiting) are excluded.
+# ProjectPulse Active Time Tracker — DB-backed
 #
-# How it works:
-#   1. A PostToolUse hook appends a timestamp on every tool call
-#   2. "stop" calculates active time: consecutive calls < 3min apart = working
-#   3. Gaps > 3min are treated as idle and excluded
+# Pipes every tool call into ProjectPulse's /api/tool-sessions/tick endpoint,
+# which stores ticks in SQLite. On stop, the API materializes a TimeEntry
+# (status=draft) and — if the user has autoPushClaudeTime enabled — also
+# pushes a Jira worklog.
+#
+# Required env vars (loaded from .env or shell):
+#   PROJECTPULSE_API_BASE        e.g. http://localhost:3000
+#   PROJECTPULSE_INTERNAL_TOKEN  matches INTERNAL_API_TOKEN in .env
+#   PROJECTPULSE_USER_EMAIL      your @axelerant.com address
 #
 # Usage:
 #   ./scripts/track-time.sh start RGU-224 "Description"
-#   ./scripts/track-time.sh tick              # Called by hook on each tool call
-#   ./scripts/track-time.sh stop              # Calculate active time
-#   ./scripts/track-time.sh log               # Push to Jira
-#   ./scripts/track-time.sh status            # Show current status
+#   ./scripts/track-time.sh tick              # called by PostToolUse hook
+#   ./scripts/track-time.sh stop              # ends session, creates TimeEntry
+#   ./scripts/track-time.sh log               # alias for: stop --push
+#   ./scripts/track-time.sh status
 
 TRACK_FILE="/tmp/pp-track.json"
-TICKS_FILE="/tmp/pp-track-ticks.log"
-API_BASE="http://localhost:3000"
-IDLE_THRESHOLD=180  # seconds — gap > 3 min = idle
+API_BASE="${PROJECTPULSE_API_BASE:-http://localhost:3000}"
+TOKEN="${PROJECTPULSE_INTERNAL_TOKEN:-}"
+USER_EMAIL="${PROJECTPULSE_USER_EMAIL:-}"
+
+if [ -f .env ]; then
+  # Pull values from .env if not already exported
+  TOKEN="${TOKEN:-$(grep -E '^INTERNAL_API_TOKEN=' .env | cut -d= -f2- | tr -d '"')}"
+  USER_EMAIL="${USER_EMAIL:-$(grep -E '^PROJECTPULSE_USER_EMAIL=' .env | cut -d= -f2- | tr -d '"')}"
+fi
+
+api_call() {
+  local path="$1"
+  local payload="$2"
+  curl -s -X POST "$API_BASE$path" \
+    -H "Content-Type: application/json" \
+    -H "X-Internal-Token: $TOKEN" \
+    -H "X-User-Email: $USER_EMAIL" \
+    -d "$payload"
+}
 
 case "$1" in
   start)
     TICKET="${2:?Ticket key required (e.g. RGU-224)}"
     DESCRIPTION="${3:-Implementation work on $TICKET via Claude Code}"
+    echo "{\"ticket\":\"$TICKET\",\"description\":\"$DESCRIPTION\"}" > "$TRACK_FILE"
 
-    # Clean previous session
-    rm -f "$TICKS_FILE"
+    RESULT=$(api_call "/api/tool-sessions/tick" "{\"ticketKey\":\"$TICKET\",\"description\":\"$DESCRIPTION\"}")
+    SESSION_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sessionId',''))" 2>/dev/null)
 
-    # Write tracking metadata
-    echo "{\"ticket\":\"$TICKET\",\"start\":$(date +%s),\"description\":\"$DESCRIPTION\"}" > "$TRACK_FILE"
+    if [ -z "$SESSION_ID" ]; then
+      echo "⚠  Could not start session — check API_BASE / INTERNAL_TOKEN / USER_EMAIL"
+      echo "   Response: $RESULT"
+      exit 1
+    fi
 
-    # Record first tick
-    date +%s >> "$TICKS_FILE"
-
-    echo "⏱  Tracking active time for $TICKET"
-    echo "   (Only tool call time is counted — idle gaps excluded)"
+    echo "⏱  Tracking $TICKET (session $SESSION_ID)"
+    echo "   Active time only — idle gaps > 3min are excluded"
     ;;
 
   tick)
-    # Called by the PostToolUse hook on every tool call
     if [ -f "$TRACK_FILE" ]; then
-      date +%s >> "$TICKS_FILE"
+      TICKET=$(python3 -c "import json; print(json.load(open('$TRACK_FILE'))['ticket'])" 2>/dev/null)
+      [ -n "$TICKET" ] && api_call "/api/tool-sessions/tick" "{\"ticketKey\":\"$TICKET\"}" > /dev/null
     fi
     ;;
 
-  stop)
+  stop|log)
     if [ ! -f "$TRACK_FILE" ]; then
       echo "No active timer"
       exit 1
     fi
-
     TICKET=$(python3 -c "import json; print(json.load(open('$TRACK_FILE'))['ticket'])")
 
-    # Calculate active time from tick log
-    RESULT=$(python3 << 'PYEOF'
-import json
+    PUSH_FLAG="false"
+    [ "$1" = "log" ] && PUSH_FLAG="true"
 
-ticks_file = "/tmp/pp-track-ticks.log"
-track_file = "/tmp/pp-track.json"
-idle_threshold = 180  # 3 minutes
+    RESULT=$(api_call "/api/tool-sessions/stop" "{\"ticketKey\":\"$TICKET\",\"pushToJira\":$PUSH_FLAG}")
+    STATUS=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
+    DURATION=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('durationLabel','?'))" 2>/dev/null)
+    WORKLOG_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('worklogId') or '')" 2>/dev/null)
 
-try:
-    with open(ticks_file) as f:
-        ticks = sorted(int(line.strip()) for line in f if line.strip())
-except FileNotFoundError:
-    ticks = []
-
-if len(ticks) < 2:
-    # Only one tick or none — count minimum 1 minute
-    active_seconds = 60
-    wall_seconds = 60
-else:
-    active_seconds = 0
-    wall_seconds = ticks[-1] - ticks[0]
-    for i in range(1, len(ticks)):
-        gap = ticks[i] - ticks[i-1]
-        if gap <= idle_threshold:
-            active_seconds += gap
-        # else: idle gap, skip it
-
-    # Minimum 60 seconds
-    active_seconds = max(active_seconds, 60)
-
-active_minutes = round(active_seconds / 60)
-wall_minutes = round(wall_seconds / 60)
-h = active_minutes // 60
-m = active_minutes % 60
-time_str = f"{h}h {m}m" if h > 0 else f"{m}m"
-wall_h = wall_minutes // 60
-wall_m = wall_minutes % 60
-wall_str = f"{wall_h}h {wall_m}m" if wall_h > 0 else f"{wall_m}m"
-
-# Update track file
-with open(track_file) as f:
-    data = json.load(f)
-
-data["end"] = ticks[-1] if ticks else 0
-data["active_minutes"] = active_minutes
-data["wall_minutes"] = wall_minutes
-data["time_spent"] = time_str
-data["tick_count"] = len(ticks)
-
-with open(track_file, "w") as f:
-    json.dump(data, f)
-
-print(f"TICKET={data['ticket']}")
-print(f"ACTIVE={time_str}")
-print(f"WALL={wall_str}")
-print(f"TICKS={len(ticks)}")
-PYEOF
-    )
-
-    eval "$RESULT"
-    echo "⏱  Timer stopped for $TICKET"
-    echo "   Active time: $ACTIVE (across $TICKS tool calls)"
-    echo "   Wall time:   $WALL"
-    echo "   Idle time excluded automatically"
-    ;;
-
-  log)
-    if [ ! -f "$TRACK_FILE" ]; then
-      echo "No tracked time to log"
-      exit 1
-    fi
-
-    TICKET=$(python3 -c "import json; print(json.load(open('$TRACK_FILE'))['ticket'])")
-    TIME_SPENT=$(python3 -c "import json; print(json.load(open('$TRACK_FILE')).get('time_spent','1m'))")
-    ACTIVE_MIN=$(python3 -c "import json; print(json.load(open('$TRACK_FILE')).get('active_minutes', 0))")
-    DESC=$(python3 -c "import json; print(json.load(open('$TRACK_FILE')).get('description','Claude Code implementation'))")
-    TICKS=$(python3 -c "import json; print(json.load(open('$TRACK_FILE')).get('tick_count', 0))")
-
-    if [ "$ACTIVE_MIN" = "0" ]; then
-      echo "No active time recorded. Run 'stop' first."
-      exit 1
-    fi
-
-    # Push to Jira
-    RESULT=$(curl -s -X POST "$API_BASE/api/jira/worklog" \
-      -H "Content-Type: application/json" \
-      -d "{\"ticketKey\":\"$TICKET\",\"timeSpent\":\"$TIME_SPENT\",\"description\":\"$DESC ($TICKS tool calls tracked)\"}")
-
-    SUCCESS=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('success', False))")
-
-    if [ "$SUCCESS" = "True" ]; then
-      echo "✅ Logged $TIME_SPENT (active) to $TICKET in Jira"
-      rm -f "$TRACK_FILE" "$TICKS_FILE"
+    if [ "$STATUS" = "logged" ]; then
+      echo "✅ $TICKET — $DURATION pushed to Jira (worklog $WORKLOG_ID)"
+    elif [ "$STATUS" = "draft" ]; then
+      echo "📝 $TICKET — $DURATION saved as draft (approve from /tools to push to Jira)"
     else
-      ERROR=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error', 'Unknown error'))")
-      echo "❌ Failed: $ERROR"
+      echo "❌ Stop failed: $RESULT"
+      exit 1
     fi
+
+    rm -f "$TRACK_FILE"
     ;;
 
   status)
@@ -157,34 +97,12 @@ PYEOF
       echo "No active timer"
       exit 0
     fi
-
     TICKET=$(python3 -c "import json; print(json.load(open('$TRACK_FILE'))['ticket'])")
-    END=$(python3 -c "import json; print(json.load(open('$TRACK_FILE')).get('end', 0))")
-    TICK_COUNT=0
-    if [ -f "$TICKS_FILE" ]; then
-      TICK_COUNT=$(wc -l < "$TICKS_FILE" | tr -d ' ')
-    fi
-
-    if [ "$END" != "0" ]; then
-      TIME_SPENT=$(python3 -c "import json; print(json.load(open('$TRACK_FILE')).get('time_spent','?'))")
-      echo "⏹  $TICKET — $TIME_SPENT active ($TICK_COUNT tool calls) — ready to log"
-    else
-      NOW=$(date +%s)
-      START=$(python3 -c "import json; print(json.load(open('$TRACK_FILE'))['start'])")
-      WALL=$(( (NOW - START) / 60 ))
-      echo "⏱  $TICKET — tracking ($TICK_COUNT tool calls so far, ${WALL}m wall time)"
-    fi
+    echo "⏱  Tracking $TICKET — run 'stop' to finalize, 'log' to push to Jira immediately"
     ;;
 
   *)
-    echo "Usage: track-time.sh {start|stop|log|status} [ticket-key] [description]"
-    echo ""
-    echo "Commands:"
-    echo "  start TICKET [desc]  Start tracking active time for a ticket"
-    echo "  tick                 Record a tool call (called by hook automatically)"
-    echo "  stop                 Calculate active time (excludes idle gaps > 3min)"
-    echo "  log                  Push active time to Jira as a worklog"
-    echo "  status               Show current tracking state"
+    echo "Usage: track-time.sh {start|tick|stop|log|status} [ticket-key] [description]"
     exit 1
     ;;
 esac

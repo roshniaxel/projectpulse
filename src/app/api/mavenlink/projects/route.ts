@@ -1,8 +1,12 @@
 import { getMavenlinkConnector } from "@/lib/integrations/mavenlink";
+import { requireDbUser } from "@/lib/auth-helpers";
 
 export async function GET() {
+  const { user, unauthorized } = await requireDbUser();
+  if (unauthorized) return unauthorized;
+
   try {
-    const connector = getMavenlinkConnector();
+    const connector = await getMavenlinkConnector(user.id);
     const [workspaces, projects] = await Promise.all([
       connector.fetchWorkspaces(),
       connector.fetchProjects(),

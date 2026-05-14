@@ -1,11 +1,12 @@
-import { RealSlackConnector } from "./real";
-import { MockSlackConnector } from "./mock";
+import { RealSlackConnector, type SlackCreds } from "./real";
+import { DisconnectedSlackConnector } from "./disconnected";
 import type { ISlackConnector } from "./connector";
+import { getIntegrationCredentials } from "@/lib/integration-credentials";
 
-export function getSlackConnector(): ISlackConnector {
-  return process.env.USE_MOCK_SLACK === "true"
-    ? new MockSlackConnector()
-    : new RealSlackConnector();
+export async function getSlackConnector(userId: string): Promise<ISlackConnector> {
+  const creds = await getIntegrationCredentials(userId, "slack");
+  if (!creds?.botToken) return new DisconnectedSlackConnector();
+  return new RealSlackConnector(creds as SlackCreds);
 }
 
 export type { ISlackConnector } from "./connector";

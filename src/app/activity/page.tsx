@@ -1,37 +1,57 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Link2Off } from "lucide-react";
+import { Suspense, useEffect, useState, useMemo, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
+import { Link2Off } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DailyTimeline } from "@/components/activity/daily-timeline";
 import { ActivityFilters } from "@/components/activity/activity-filters";
 import { GranolaImportDialog } from "@/components/activity/granola-import-dialog";
-import { MOCK_ACTIVITIES } from "@/lib/mock-data";
 import { useIntegrations } from "@/contexts/integrations-context";
-import { formatDate } from "@/lib/utils";
 import type { IntegrationSource, Activity } from "@/lib/types";
 
 export default function ActivityPage() {
-  const { connectedSources, isConnected } = useIntegrations();
+  return (
+    <Suspense fallback={<div className="text-sm text-muted-foreground">Loading…</div>}>
+      <ActivityPageInner />
+    </Suspense>
+  );
+}
+
+function ActivityPageInner() {
+  const { connectedSources, isConnected, loading: integrationsLoading } = useIntegrations();
+  const searchParams = useSearchParams();
+  const queryString = searchParams.toString();
+
   const [selectedSources, setSelectedSources] = useState<IntegrationSource[]>([]);
   const [importedActivities, setImportedActivities] = useState<Activity[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  // Only show activities from connected sources
+  useEffect(() => {
+    if (connectedSources.length === 0) {
+      setActivities([]);
+      return;
+    }
+    setLoading(true);
+    fetch(`/api/activities?${queryString}`)
+      .then((r) => r.json())
+      .then((d) => setActivities(d.activities || []))
+      .catch(() => toast.error("Failed to load activities"))
+      .finally(() => setLoading(false));
+  }, [queryString, connectedSources.length]);
+
   const allActivities = useMemo(() => {
-    const connected = [...MOCK_ACTIVITIES, ...importedActivities].filter(
-      (a) => connectedSources.includes(a.source)
-    );
-    return connected.sort(
+    return [...activities, ...importedActivities].sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
-  }, [importedActivities, connectedSources]);
+  }, [activities, importedActivities]);
 
   const toggleSource = (source: IntegrationSource) => {
     setSelectedSources((prev) =>
-      prev.includes(source)
-        ? prev.filter((s) => s !== source)
-        : [...prev, source]
+      prev.includes(source) ? prev.filter((s) => s !== source) : [...prev, source]
     );
   };
 
@@ -40,12 +60,11 @@ export default function ActivityPage() {
     return allActivities.filter((a) => selectedSources.includes(a.source));
   }, [selectedSources, allActivities]);
 
-  const handleGranolaImport = useCallback((activities: Activity[]) => {
-    setImportedActivities((prev) => [...prev, ...activities]);
+  const handleGranolaImport = useCallback((items: Activity[]) => {
+    setImportedActivities((prev) => [...prev, ...items]);
   }, []);
 
-  // Empty state when no tools connected
-  if (connectedSources.length === 0) {
+  if (!integrationsLoading && connectedSources.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
         <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-gray-100 mb-4">
@@ -64,37 +83,23 @@ export default function ActivityPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header with date nav */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon-sm">
-            <ChevronLeft className="w-4 h-4" />
-          </Button>
-          <span className="text-sm font-medium min-w-[200px] text-center">
-            {formatDate(new Date().toISOString())}
-          </span>
-          <Button variant="outline" size="icon-sm">
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        </div>
+        <span className="text-sm font-medium">
+          {loading ? "Loading…" : `${filteredActivities.length} activities`}
+        </span>
         <div className="flex items-center gap-2">
           {isConnected("granola") && (
             <GranolaImportDialog onImport={handleGranolaImport} />
           )}
-          <span className="text-sm text-muted-foreground">
-            {filteredActivities.length} activities
-          </span>
         </div>
       </div>
 
-      {/* Filters — only show connected sources */}
       <ActivityFilters
         selectedSources={selectedSources}
         onToggleSource={toggleSource}
         availableSources={connectedSources}
       />
 
-      {/* Timeline */}
       <DailyTimeline activities={filteredActivities} />
     </div>
   );

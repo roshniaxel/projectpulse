@@ -3,7 +3,6 @@
 import { Sparkles, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { GenerationStep, TimesheetState } from "@/lib/types";
-import { MOCK_ACTIVITIES } from "@/lib/mock-data";
 
 interface GenerateButtonProps {
   state: TimesheetState;
@@ -27,8 +26,7 @@ export function GenerateButton({
         Generate Your Timesheet
       </h2>
       <p className="text-muted-foreground text-center max-w-md mb-8">
-        Claude will analyze your {MOCK_ACTIVITIES.length} captured activities and
-        generate a draft timesheet grouped by ticket and project.
+        Claude will analyze your captured activities and generate a draft timesheet grouped by ticket and project.
       </p>
 
       <Button
@@ -78,18 +76,6 @@ export function GenerateButton({
         </div>
       )}
 
-      {/* Source summary */}
-      {state === "idle" && (
-        <div className="mt-6 flex items-center gap-2 text-sm text-muted-foreground">
-          <div className="flex -space-x-1">
-            <div className="w-3 h-3 rounded-full bg-blue-500 border-2 border-white" />
-            <div className="w-3 h-3 rounded-full bg-emerald-500 border-2 border-white" />
-            <div className="w-3 h-3 rounded-full bg-red-500 border-2 border-white" />
-            <div className="w-3 h-3 rounded-full bg-purple-500 border-2 border-white" />
-          </div>
-          {MOCK_ACTIVITIES.length} activities from 4 sources
-        </div>
-      )}
     </div>
   );
 }

@@ -1,33 +1,31 @@
 import { type NextRequest } from "next/server";
 import { getZoomConnector } from "@/lib/integrations/zoom";
-import { getSlackConnector } from "@/lib/integrations/slack";
 import { getJiraConnector } from "@/lib/integrations/jira";
 import { getCalendarConnector } from "@/lib/integrations/google-calendar";
+import { requireDbUser, parseDateRange } from "@/lib/auth-helpers";
 import type { PendingTimeEntry } from "@/lib/types";
-import { MOCK_PENDING_ENTRIES } from "@/lib/mock-data";
 
-// In mock mode, return mock pending entries
-// In real mode, poll all sources and generate pending entries
 export async function GET(request: NextRequest) {
-  const date = request.nextUrl.searchParams.get("date") || new Date().toISOString().split("T")[0];
-  const useMock = process.env.USE_MOCK_ZOOM === "true"; // If any mock is on, use mock pipeline
+  const { user, unauthorized } = await requireDbUser();
+  if (unauthorized) return unauthorized;
 
-  if (useMock) {
-    return Response.json({ entries: MOCK_PENDING_ENTRIES });
-  }
+  const { from, to } = parseDateRange(request.nextUrl.searchParams);
 
   try {
-    const entries: PendingTimeEntry[] = [];
-
-    // 1. Detect Zoom calls
-    const [zoomResult, slackResult, jiraResult, calendarResult] = await Promise.allSettled([
-      getZoomConnector().fetchActivities({ since: date }),
-      getSlackConnector().fetchActivities({ since: date }),
-      getJiraConnector().fetchTickets({ projectKey: "", status: ["In Progress", "In Review"] }),
-      getCalendarConnector().fetchActivities({ since: date }),
+    const [zoom, jira, calendar] = await Promise.all([
+      getZoomConnector(user.id),
+      getJiraConnector(user.id),
+      getCalendarConnector(user.id),
     ]);
 
-    // Zoom meetings → pending entries
+    const entries: PendingTimeEntry[] = [];
+
+    const [zoomResult, jiraResult, calendarResult] = await Promise.allSettled([
+      zoom.fetchActivities({ since: from, until: to }),
+      jira.fetchTickets({ projectKey: "", status: ["In Progress", "In Review"] }),
+      calendar.fetchActivities({ since: from, until: to }),
+    ]);
+
     if (zoomResult.status === "fulfilled") {
       for (const activity of zoomResult.value) {
         if (activity.durationMinutes && activity.durationMinutes > 0) {
@@ -47,11 +45,9 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Calendar meetings → pending entries (if not already a Zoom call)
     if (calendarResult.status === "fulfilled") {
       for (const activity of calendarResult.value) {
         if (activity.durationMinutes && activity.durationMinutes > 0) {
-          // Skip if a Zoom entry with similar time already exists
           const hasZoomDuplicate = entries.some(
             (e) =>
               e.source === "zoom" &&
@@ -75,7 +71,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Jira tickets with time spent → pending entries
     if (jiraResult.status === "fulfilled") {
       for (const ticket of jiraResult.value) {
         if (ticket.estimate?.timeSpentSeconds && ticket.estimate.timeSpentSeconds > 0) {
@@ -97,7 +92,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Sort by detected time
     entries.sort((a, b) => new Date(a.detectedAt).getTime() - new Date(b.detectedAt).getTime());
 
     return Response.json({ entries });

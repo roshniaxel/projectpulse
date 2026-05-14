@@ -60,6 +60,22 @@ export const SOURCE_NAMES: Record<IntegrationSource, string> = {
   zoom: "Zoom",
 };
 
+// How each integration is connected from the Settings UI
+export type ConnectMethod =
+  | "oauth_redirect" // click Connect → bounces through provider's OAuth page
+  | "auto_with_signin" // wired into the Google sign-in flow; auto-connected
+  | "paste_token"; // paste credentials into a ConnectDialog form
+
+export const CONNECT_METHOD: Record<IntegrationSource, ConnectMethod> = {
+  jira: "oauth_redirect",
+  google_calendar: "auto_with_signin",
+  github: "paste_token",
+  slack: "paste_token",
+  zoom: "paste_token",
+  mavenlink: "paste_token",
+  granola: "paste_token",
+};
+
 // Alert severity colors
 export const SEVERITY_COLORS: Record<
   AlertSeverity,
@@ -108,6 +124,7 @@ export const ACTIVITY_TYPE_CONFIG: Record<
 // Sidebar navigation items
 export const NAV_ITEMS = [
   { label: "Dashboard", href: "/", icon: "LayoutDashboard" },
+  { label: "Tools Time", href: "/tools", icon: "Timer" },
   { label: "Timesheet", href: "/timesheet", icon: "Clock" },
   { label: "Alerts", href: "/alerts", icon: "AlertTriangle" },
   { label: "Activity", href: "/activity", icon: "Activity" },

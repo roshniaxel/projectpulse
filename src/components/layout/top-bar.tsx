@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { Menu, Bell, LogOut } from "lucide-react";
@@ -15,11 +16,11 @@ import {
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { MobileSidebar } from "./mobile-nav";
 import { ProjectSelector } from "./project-selector";
-import { formatDate } from "@/lib/utils";
-import { MOCK_RISK_ALERTS } from "@/lib/mock-data";
+import { DateRangePicker } from "./date-range-picker";
 
 const PAGE_TITLES: Record<string, string> = {
   "/": "Dashboard",
+  "/tools": "Tools Time",
   "/timesheet": "Timesheet",
   "/alerts": "Risk Alerts",
   "/activity": "Activity Feed",
@@ -43,7 +44,6 @@ export function TopBar() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const title = PAGE_TITLES[pathname] || "ProjectPulse";
-  const unreadAlerts = MOCK_RISK_ALERTS.filter((a) => !a.isRead).length;
 
   const user = session?.user;
   const initials = getInitials(user?.name, user?.email);
@@ -73,19 +73,14 @@ export function TopBar() {
       </div>
 
       {/* Right side */}
-      <div className="flex items-center gap-4">
-        <span className="hidden sm:block text-sm text-muted-foreground">
-          {formatDate(new Date().toISOString())}
-        </span>
+      <div className="flex items-center gap-3">
+        <Suspense fallback={null}>
+          <DateRangePicker />
+        </Suspense>
 
         {/* Notifications */}
         <Button variant="ghost" size="icon" className="relative">
           <Bell className="w-5 h-5" />
-          {unreadAlerts > 0 && (
-            <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-              {unreadAlerts}
-            </span>
-          )}
         </Button>
 
         {/* User menu */}

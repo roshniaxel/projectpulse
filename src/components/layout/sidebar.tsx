@@ -9,11 +9,13 @@ import {
   Activity,
   Settings,
   Zap,
+  Timer,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
+  { label: "Tools Time", href: "/tools", icon: Timer },
   { label: "Timesheet", href: "/timesheet", icon: Clock },
   { label: "Alerts", href: "/alerts", icon: AlertTriangle },
   { label: "Activity", href: "/activity", icon: Activity },
@@ -47,13 +49,21 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                "relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
                 isActive
-                  ? "bg-gray-100 text-gray-900"
+                  ? "bg-violet-50 text-violet-700"
                   : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
               )}
             >
-              <Icon className="w-5 h-5" />
+              {isActive && (
+                <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-violet-600" />
+              )}
+              <Icon
+                className={cn(
+                  "w-5 h-5",
+                  isActive ? "text-violet-600" : "text-gray-500"
+                )}
+              />
               {item.label}
             </Link>
           );

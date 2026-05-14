@@ -72,6 +72,7 @@ export interface JiraTicket {
   assignee?: string;
   estimate: JiraEstimate | null;
   projectKey: string;
+  updated?: string;
 }
 
 // Jira time estimate

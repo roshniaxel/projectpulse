@@ -7,6 +7,7 @@ import { StatsCards } from "@/components/dashboard/stats-cards";
 import { PendingApprovals } from "@/components/dashboard/pending-approvals";
 import { PendingTimesheet } from "@/components/dashboard/pending-timesheet";
 import { ActiveAlerts } from "@/components/dashboard/active-alerts";
+import { ProductivityInsights } from "@/components/dashboard/productivity-insights";
 import { RecentActivities } from "@/components/dashboard/recent-activities";
 import { useIntegrations } from "@/contexts/integrations-context";
 
@@ -39,6 +40,9 @@ export default function DashboardPage() {
     <div className="space-y-6">
       {/* Stats overview */}
       <StatsCards />
+
+      {/* Productivity insights — donut + breakdown */}
+      <ProductivityInsights />
 
       {/* Auto-detected time — approval queue */}
       <PendingApprovals />

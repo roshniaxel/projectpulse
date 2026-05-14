@@ -1,11 +1,16 @@
-import { RealMavenlinkConnector } from "./real";
-import { MockMavenlinkConnector } from "./mock";
+import { RealMavenlinkConnector, type MavenlinkCreds } from "./real";
+import { DisconnectedMavenlinkConnector } from "./disconnected";
 import type { IMavenlinkConnector } from "./connector";
+import { getIntegrationCredentials } from "@/lib/integration-credentials";
 
-export function getMavenlinkConnector(): IMavenlinkConnector {
-  return process.env.USE_MOCK_MAVENLINK === "true"
-    ? new MockMavenlinkConnector()
-    : new RealMavenlinkConnector();
+export async function getMavenlinkConnector(
+  userId: string
+): Promise<IMavenlinkConnector> {
+  const creds = await getIntegrationCredentials(userId, "mavenlink");
+  if (!creds?.apiToken || !creds?.accountId) {
+    return new DisconnectedMavenlinkConnector();
+  }
+  return new RealMavenlinkConnector(creds as MavenlinkCreds);
 }
 
 export type { IMavenlinkConnector } from "./connector";

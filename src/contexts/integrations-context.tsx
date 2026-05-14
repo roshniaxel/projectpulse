@@ -11,148 +11,150 @@ import {
 import { useSession } from "next-auth/react";
 import type { IntegrationSource, Integration } from "@/lib/types";
 
-// All available integrations (not connected by default)
-const ALL_INTEGRATIONS: Integration[] = [
+const ALL_INTEGRATIONS: Omit<Integration, "connected">[] = [
   {
     id: "int-jira",
     source: "jira",
     displayName: "Jira",
     description: "Track tickets, sprint progress, and team velocity",
-    connected: false,
   },
   {
     id: "int-github",
     source: "github",
     displayName: "GitHub",
     description: "Monitor commits, pull requests, and code reviews",
-    connected: false,
   },
   {
     id: "int-calendar",
     source: "google_calendar",
     displayName: "Google Calendar",
     description: "Capture meetings, standups, and sprint ceremonies",
-    connected: false,
   },
   {
     id: "int-slack",
     source: "slack",
     displayName: "Slack",
     description: "Track project discussions and ticket-related threads",
-    connected: false,
   },
   {
     id: "int-zoom",
     source: "zoom",
     displayName: "Zoom",
     description: "Auto-detect call duration and log time from meetings",
-    connected: false,
   },
   {
     id: "int-mavenlink",
     source: "mavenlink",
     displayName: "Mavenlink",
     description: "Push approved timesheets and sync project hours",
-    connected: false,
   },
   {
     id: "int-granola",
     source: "granola",
     displayName: "Granola",
     description: "Import AI meeting notes and action items",
-    connected: false,
   },
 ];
 
-function storageKey(email: string) {
-  return `pp_integrations_${email}`;
-}
+type ConnectionMap = Record<string, { connectedAt: string | null }>;
 
 interface IntegrationsContextValue {
   integrations: Integration[];
   connectedSources: IntegrationSource[];
   isConnected: (source: IntegrationSource) => boolean;
-  connect: (source: IntegrationSource) => void;
-  disconnect: (source: IntegrationSource) => void;
+  hasAnyConnection: boolean;
+  loading: boolean;
+  refresh: () => Promise<void>;
+  disconnect: (source: IntegrationSource) => Promise<void>;
 }
 
 const IntegrationsContext = createContext<IntegrationsContextValue>({
-  integrations: ALL_INTEGRATIONS,
+  integrations: ALL_INTEGRATIONS.map((i) => ({ ...i, connected: false })),
   connectedSources: [],
   isConnected: () => false,
-  connect: () => {},
-  disconnect: () => {},
+  hasAnyConnection: false,
+  loading: false,
+  refresh: async () => {},
+  disconnect: async () => {},
 });
 
 export function IntegrationsProvider({ children }: { children: ReactNode }) {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const email = session?.user?.email || "";
-  const [connectedMap, setConnectedMap] = useState<Record<string, boolean>>({});
+  const [connections, setConnections] = useState<ConnectionMap>({});
+  const [loading, setLoading] = useState(true);
 
-  // Load from localStorage on login
-  useEffect(() => {
-    if (!email) return;
+  const refresh = useCallback(async () => {
+    if (!email) {
+      setConnections({});
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
-      const saved = localStorage.getItem(storageKey(email));
-      if (saved) {
-        setConnectedMap(JSON.parse(saved));
+      const res = await fetch("/api/integrations");
+      if (res.ok) {
+        const data = await res.json();
+        const map: ConnectionMap = {};
+        for (const c of data.connections || []) {
+          map[c.source] = { connectedAt: c.connectedAt };
+        }
+        setConnections(map);
       }
     } catch {
       // ignore
+    } finally {
+      setLoading(false);
     }
   }, [email]);
 
-  // Persist to localStorage
-  const persist = useCallback(
-    (map: Record<string, boolean>) => {
-      if (!email) return;
-      localStorage.setItem(storageKey(email), JSON.stringify(map));
-    },
-    [email]
-  );
-
-  const connect = useCallback(
-    (source: IntegrationSource) => {
-      setConnectedMap((prev) => {
-        const next = { ...prev, [source]: true };
-        persist(next);
-        return next;
-      });
-    },
-    [persist]
-  );
+  useEffect(() => {
+    if (status === "loading") return;
+    refresh();
+  }, [refresh, status]);
 
   const disconnect = useCallback(
-    (source: IntegrationSource) => {
-      setConnectedMap((prev) => {
-        const next = { ...prev, [source]: false };
-        persist(next);
-        return next;
+    async (source: IntegrationSource) => {
+      const res = await fetch(`/api/integrations/${source}`, {
+        method: "DELETE",
       });
+      if (res.ok) {
+        setConnections((prev) => {
+          const next = { ...prev };
+          delete next[source];
+          return next;
+        });
+      }
     },
-    [persist]
+    []
   );
 
   const isConnected = useCallback(
-    (source: IntegrationSource) => !!connectedMap[source],
-    [connectedMap]
+    (source: IntegrationSource) => !!connections[source],
+    [connections]
   );
 
-  const connectedSources = Object.entries(connectedMap)
-    .filter(([, v]) => v)
-    .map(([k]) => k as IntegrationSource);
-
-  // Build integrations list with live connection status
   const integrations: Integration[] = ALL_INTEGRATIONS.map((int) => ({
     ...int,
-    connected: !!connectedMap[int.source],
-    connectedAt: connectedMap[int.source] ? new Date().toISOString() : undefined,
-    accountLabel: connectedMap[int.source] ? email : undefined,
+    connected: !!connections[int.source],
+    connectedAt: connections[int.source]?.connectedAt || undefined,
+    accountLabel: connections[int.source] ? email : undefined,
   }));
+
+  const connectedSources = Object.keys(connections) as IntegrationSource[];
+  const hasAnyConnection = connectedSources.length > 0;
 
   return (
     <IntegrationsContext.Provider
-      value={{ integrations, connectedSources, isConnected, connect, disconnect }}
+      value={{
+        integrations,
+        connectedSources,
+        isConnected,
+        hasAnyConnection,
+        loading,
+        refresh,
+        disconnect,
+      }}
     >
       {children}
     </IntegrationsContext.Provider>

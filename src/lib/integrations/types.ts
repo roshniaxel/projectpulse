@@ -12,6 +12,7 @@ export interface ActivityConnector extends BaseConnector {
     since: string;
     until?: string;
     projectId?: string;
+    projectIds?: string[];
   }): Promise<Activity[]>;
 }
 

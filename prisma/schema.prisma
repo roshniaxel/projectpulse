@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // ─── NextAuth Models ────────────────────────────────────────────────────────
@@ -20,6 +20,11 @@ model User {
 
   // Integration connections per user
   integrations  UserIntegration[]
+
+  // Time tracking
+  timeEntries           TimeEntry[]
+  toolSessions          ToolSession[]
+  autoPushClaudeTime    Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -75,4 +80,62 @@ model UserIntegration {
   user        User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, source])
+}
+
+// ─── Time Tracking ──────────────────────────────────────────────────────────
+
+// A single block of time attributable to a user + source (+ optional ticket).
+// Created when a ToolSession ends, or when auto-detection surfaces an entry
+// from Zoom / Slack / Calendar / Jira. Goes through draft → approved → logged.
+model TimeEntry {
+  id            String   @id @default(cuid())
+  userId        String
+  source        String   // "claude_code" | "jira" | "zoom" | "slack" | "google_calendar" | "mavenlink"
+  ticketKey     String?  // e.g. "RGU-224"; null for non-ticket time
+  description   String?
+  startedAt     DateTime
+  endedAt       DateTime
+  durationSec   Int
+  status        String   @default("draft") // "draft" | "approved" | "logged" | "rejected"
+  jiraWorklogId String?  // Set once pushed to Jira
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
+  @@index([userId, ticketKey])
+  @@index([userId, status])
+}
+
+// Live aggregate of tool-call ticks for an in-progress Claude Code session.
+// One row per (user, ticket) work session. Materializes into a TimeEntry on stop.
+model ToolSession {
+  id            String   @id @default(cuid())
+  userId        String
+  tool          String   // "claude_code" (extensible to other live-tracked tools)
+  ticketKey     String?
+  description   String?
+  activeSeconds Int      @default(0)
+  ticks         Json     // [unix_ts, ...] — append-only list of tool-call timestamps
+  startedAt     DateTime @default(now())
+  endedAt       DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, endedAt])
+}
+
+// Cached Jira ticket metadata so we can check estimates / show summaries
+// without round-tripping to Jira on every request.
+model JiraTicketCache {
+  key             String   @id // e.g. "RGU-224"
+  summary         String
+  estimateSec     Int?     // timeoriginalestimate in seconds; null = no estimate
+  assigneeEmail   String?
+  status          String?
+  lastSyncedAt    DateTime @default(now())
+
+  @@index([assigneeEmail])
 }
