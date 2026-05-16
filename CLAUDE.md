@@ -51,6 +51,12 @@ ATLASSIAN_CLIENT_SECRET=""
 # Optional — only for scripts/track-time.sh shell tracker
 INTERNAL_API_TOKEN="$(openssl rand -hex 32)"
 PROJECTPULSE_USER_EMAIL="you@axelerant.com"
+
+# Optional — team timezone for date math (defaults to Asia/Kolkata).
+# Affects how "today" and the date-range picker resolve, plus how
+# YYYY-MM-DD strings are converted to UTC bounds when querying
+# Calendar / GitHub / Slack / etc.
+APP_TIMEZONE="Asia/Kolkata"
 ```
 
 > **Google OAuth credentials are shared across the team.** Ask the project admin. The OAuth app is *Internal* (Axelerant workspace only), so any `@axelerant.com` account can log in.
@@ -110,7 +116,7 @@ Each tool uses one of three flows:
 | **Jira** | OAuth redirect (one click) | — |
 | **Google Calendar** | Auto — connected during Google sign-in | — |
 | **GitHub** | Paste API token | github.com → Settings → Developer settings → Personal access tokens |
-| **Slack** | Paste bot token (xoxb-…) | Slack app → OAuth & Permissions → Bot User OAuth Token |
+| **Slack** | Paste bot token (xoxb-…) | Slack app → OAuth & Permissions → Bot User OAuth Token. Bot scopes must include `users:read.email` (used to resolve your Slack member ID so the feed only shows your own messages, not every channel member's). |
 | **Zoom** | Paste accountId + clientId + clientSecret | marketplace.zoom.us → Server-to-Server OAuth app |
 | **Mavenlink** | Paste accountId + apiToken | Kantata → Settings → API & Integrations |
 | **Granola** | Paste webhook secret | Granola webhook config |
@@ -121,27 +127,37 @@ Each tool uses one of three flows:
 
 **For everything else:** Settings → **Connect** → paste into the dialog. All credentials are encrypted with AES-256-GCM before storage. Until a tool is connected, it returns no data — every page shows an empty state with a CTA back to Settings.
 
-### 7. (Optional) Hook up Claude Code time tracking
-For automatic ticking from Claude Code tool calls:
+### 7. (Optional) Install the global Claude Code hooks
+One installer wires both auto-tracking *and* auto-stop-on-commit:
 ```bash
-mkdir -p ~/.claude/projects/-Users-$(whoami)-$(pwd | tr '/' '-')
-cat > ~/.claude/projects/-Users-$(whoami)-$(pwd | tr '/' '-')/settings.json <<EOF
-{
-  "hooks": {
-    "PostToolUse": [
-      { "matcher": ".*", "command": "$(pwd)/scripts/track-time.sh tick" }
-    ]
-  }
-}
-EOF
+brew install jq                              # one-time prerequisite
+./scripts/install-projectpulse-tracker.sh    # works from any project after this
 ```
+What it does (idempotent — safe to re-run):
+1. Copies `track-time.sh` + `auto-stop-on-commit.sh` to `~/.local/share/projectpulse/scripts/`.
+2. Patches `~/.claude/settings.json` to register two `PostToolUse` hooks:
+   - **Tick hook** (matcher `.*`) — fires on every tool call, records density on the active session.
+   - **Auto-stop hook** (matcher `Bash`) — fires only when Claude runs a Bash command. If it's a `git commit -m`/`gh pr create` and the ticket key in the message matches the active session, the session is finalised and pushed to Jira (`track-time.sh log`). Decisions are logged to `/tmp/projectpulse-auto-stop.log`.
+3. Writes `~/.config/projectpulse/config` with the API base, internal token, and your email — same file the `/logtime` skill reads, so step 8 inherits it.
+
+**Then restart Claude Code** (settings load at session start). Verify with:
+```bash
+~/.local/share/projectpulse/scripts/track-time.sh start RGU-250 "test"
+# Ask Claude to make a trivial change and commit:
+#   "Edit any README, commit with message 'RGU-250: smoke test'"
+tail -f /tmp/projectpulse-auto-stop.log     # should see the hook fire on commit
+```
+
+**Uninstall:** `rm -rf ~/.local/share/projectpulse` and remove the matching entries from `~/.claude/settings.json`.
+
+> ⚠ The auto-stop hook only fires when **Claude Code** runs the commit, not when you type `git commit` in a plain terminal. Hooks are tied to Claude's `Bash` tool, not your shell.
 
 ### 8. (Optional) Install the `/logtime` skill globally
 So you can manually log time from any Claude Code project (not just ProjectPulse):
 ```bash
 ./scripts/install-logtime-skill.sh
 ```
-Installs to `~/.claude/skills/logtime/SKILL.md` + writes config to `~/.config/projectpulse/config`. After restarting Claude Code, `/logtime` works in every project.
+Installs to `~/.claude/skills/logtime/SKILL.md` + reuses the config written in step 7. After restarting Claude Code, `/logtime` works in every project.
 
 ## Testing the app (smoke test)
 
@@ -274,6 +290,12 @@ Each entry can be approved/edited/rejected, then pushed to Jira (worklog) or Mav
 - Minimum 1 minute per session.
 - On `stop`, a `TimeEntry` is created with `status=draft`. If `User.autoPushClaudeTime` is true (or `--push` flag), it also POSTs to `/api/jira/worklog` and flips to `logged`.
 
+**A2. Auto-stop-on-commit (`scripts/auto-stop-on-commit.sh`)** — closes the loop so you don't need to remember to `stop`. After running step 7 of setup, every `git commit`/`gh pr create` Claude executes goes through this hook:
+
+- The hook reads the Bash command on stdin, looks for a ticket key like `[A-Z]{2,}-[0-9]+` in `-m`/`-am`/`-M`/`--message`/`--amend`/`-F` or the `gh pr create --title/--body`.
+- If found *and* the current session's ticket matches, it runs `track-time.sh log` (stop + push). On mismatch or no key, it logs a skip reason and lets the commit proceed untouched.
+- Always exits 0 — a parse miss never blocks a tool call. Debug log at `/tmp/projectpulse-auto-stop.log`. Set `PROJECTPULSE_AUTO_STOP_DRY_RUN=1` to dry-run.
+
 **B. `/logtime` skill** — captures *everything else*: thinking, code review, discussions about the ticket, manual testing, designing the approach. Anything the auto-tracker missed.
 
 Install once (works in every project after that):
@@ -312,13 +334,16 @@ Each `/logtime` call hits `POST /api/time-entries`, which creates a `TimeEntry` 
 - `src/app/tools/` — Tools Time dashboard (bar chart + entries list)
 - `src/components/` — UI by feature: `layout/`, `dashboard/`, `activity/`, `timesheet/`, `alerts/`, `settings/`, `jira/`
 - `src/components/ui/` — shadcn/ui base components (don't edit directly)
-- `src/lib/` — `auth-helpers.ts`, `crypto.ts`, `integration-credentials.ts`, `jira-rest.ts`, `tool-session-auth.ts`, `prisma.ts`, types, constants
+- `src/lib/` — `auth-helpers.ts`, `crypto.ts`, `date-range.ts` (tz-aware date helpers), `integration-credentials.ts`, `jira-rest.ts`, `tool-session-auth.ts`, `prisma.ts`, types, constants
 - `src/lib/oauth/atlassian.ts` — Atlassian OAuth 2.0 helpers (authorize URL, token exchange, refresh, accessible resources)
 - `src/lib/integrations/<tool>/` — connector per tool: `real.ts`, `disconnected.ts`, `connector.ts` (interface), `index.ts` (async factory)
 - `src/hooks/` — `use-date-range.ts`, `use-timesheet.ts`
 - `src/contexts/` — `integrations-context.tsx` (DB-backed), `project-context.tsx`
 - `prisma/schema.prisma` — DB schema (User, UserIntegration, TimeEntry, ToolSession, JiraTicketCache, NextAuth tables)
 - `scripts/track-time.sh` — auto time tracker (calls the API on every Claude tool call)
+- `scripts/auto-stop-on-commit.sh` — PostToolUse Bash hook that finalises the active session when Claude commits with a matching ticket key
+- `scripts/install-projectpulse-tracker.sh` — one-shot installer for the tick + auto-stop hooks; copies scripts to `~/.local/share/projectpulse/scripts/` and patches `~/.claude/settings.json`
+- `scripts/probe-hook.sh` — diagnostic; logs every PreToolUse/PostToolUse payload to `/tmp/projectpulse-hook-probe.log`
 - `scripts/install-logtime-skill.sh` — installs the `/logtime` skill globally
 - `.claude-skills/logtime/SKILL.md` — source for the `/logtime` skill (copied to `~/.claude/skills/logtime/SKILL.md` by the installer)
 
@@ -366,9 +391,76 @@ The app is built to run on Vercel out of the box:
 - Neon's free tier supports both local dev and prod from a single project; just use the same connection string
 - The deployed app supports any number of users — each user signs in with their own Google account, authorizes their own Jira workspace, and sees only their own data
 
+## Demo Submission
+
+Snapshot of what's working end-to-end versus what's deferred for the submission cut.
+
+### ✅ Demo-ready (working live)
+
+**Auth & multi-tenancy**
+- Google OAuth sign-in (`@axelerant.com` Workspace, Internal app)
+- Per-user JWT sessions; every API route + DB query scoped by `userId`
+- Empty-state CTAs on Dashboard / Activity / Tools / Alerts until tools are connected
+
+**Connected integrations (working)**
+| Tool | Flow | Status |
+|---|---|---|
+| Jira | OAuth 2.0 (3LO, refresh-token retry) | ✅ Live — tickets, worklogs, estimates |
+| Google Calendar | Scope-on-signin (no second OAuth app) | ✅ Live — meetings → auto-detected time |
+| GitHub | Paste PAT | ✅ Live — commits scanned for `[A-Z]+-\d+`, auto-linked to tickets |
+| Mavenlink | Paste accountId + apiToken | ✅ Live — connector wired, returns data when creds present |
+| Granola | Paste webhook secret | ✅ Live |
+
+**Time tracking**
+- `scripts/track-time.sh start/tick/stop/log` — captures Claude Code implementation time (tool-call density, 3-min idle gap exclusion)
+- `scripts/auto-stop-on-commit.sh` — PostToolUse Bash hook auto-finalises the session when Claude runs `git commit`/`gh pr create` with a matching ticket key
+- `scripts/install-projectpulse-tracker.sh` — one-shot installer (copies scripts, jq-patches `~/.claude/settings.json`, writes `~/.config/projectpulse/config`)
+- `/logtime` Claude Code skill — manual entries for thinking/review/discussion time; installer at `scripts/install-logtime-skill.sh` works in every project
+- `/tools` dashboard — per-tool bar chart, draft/approve/push-to-Jira flow, Settings toggle for auto-push
+
+**AI features (Claude Sonnet 4.6 via Anthropic SDK)**
+- `POST /api/timesheet/generate` — groups `TimeEntry` rows into polished daily logs + weekly narrative (Zod structured output)
+- `POST /api/alerts/generate` — analyses Jira tickets + tracked time to surface stalled tickets, missed estimates, scope creep, velocity risks
+- Rule-based fallback when `ANTHROPIC_API_KEY` is missing — same output shape, deterministic detection, so `/alerts` and `/timesheet` work without a key
+
+**Productivity Insights**
+- Donut chart categorising tracked time (AI-assisted / deep work / meetings / auto-logged / comms / other)
+- Tracked Time card with All / Drafts / Approved / Logged tabs that reconcile with donut totals
+
+**Cross-cutting correctness**
+- AES-256-GCM encryption for every stored credential (`src/lib/crypto.ts`)
+- Per-user scoping on Jira JQL (`currentUser()`) and Slack (`users.lookupByEmail`) — no leaking of teammates' data
+- Timezone-correct date math (`src/lib/date-range.ts`, default `Asia/Kolkata`) across every connector
+- Global date filter, URL-synced (`?from=&to=`)
+- Deployed to Vercel from `main`; Neon Postgres handles dev + prod
+
+### ⏳ Pending — blocked on external approval (call this out in the demo)
+
+**Slack** — requires Axelerant Slack workspace admin to approve a new Slack App with bot scopes (`channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`, `users:read.email`). Connector + UI are **fully built and tested** with a personal-workspace token. In the submitted demo, the Slack card on `/settings` will show **Connect** (paste-token dialog ready); the activity feed silently skips Slack until approval lands.
+
+**Zoom** — requires Axelerant Zoom account owner to approve a new **Server-to-Server OAuth app** (scopes: `meeting:read:admin`, `user:read:admin`, `recording:read:admin`). Connector + UI are **fully built**. Same demo behaviour as Slack — card shows **Connect**, no data until approval.
+
+Both blockers are *configuration*, not code — once admin approves, paste creds into Settings and the data shows up immediately.
+
+### ⏳ Pending — nice-to-have, deferred past submission
+
+- **OAuth for Slack / GitHub / Zoom** — currently paste-token; would follow the same Atlassian 3LO pattern. Not blocking the demo.
+
+### Demo walkthrough (5 min, in order)
+
+1. **Empty state** — fresh `@axelerant.com` sign-in → Dashboard's "Connect Your Tools" CTA.
+2. **Jira OAuth** — one-click Connect on Settings → Atlassian Accept → bounced back, Connected ✓. Recent Activity populates.
+3. **Calendar** — already connected from sign-in. Auto-Detected Time card shows today's meetings.
+4. **GitHub** — paste PAT → commits with `RGU-XXX` keys auto-link to tickets in Recent Activity.
+5. **Time tracking live** — terminal: `track-time.sh start RGU-224 "demo"` → ask Claude to make a trivial edit → `git commit -m "RGU-224: demo"` → the auto-stop hook fires, the draft TimeEntry appears on `/tools`, click ✈ to push to Jira.
+6. **`/logtime`** — in *any* other project, run `/logtime RGU-224 30m reviewed PR` → draft entry appears on `/tools` with `source=manual`.
+7. **AI Timesheet** — `/timesheet` → Claude groups the day's entries into a polished log.
+8. **AI Alerts** — `/alerts` → stalled-ticket + missed-estimate cards.
+9. **Call out Slack/Zoom** — show the Settings cards as "Connect" with a one-line note that workspace admin approval is pending.
+
 ## Roadmap
 
-### ✅ Shipped (foundation + time tracking + per-user integrations)
+### ✅ Shipped (foundation + time tracking + per-user integrations + AI)
 **Phase 1 — DB schema:** `TimeEntry`, `ToolSession`, `JiraTicketCache`, `User.autoPushClaudeTime`.
 
 **Phase 2 — Per-user enforcement:** every API route returns 401 without a session; all DB queries scoped by `userId`.
@@ -411,13 +503,29 @@ The app is built to run on Vercel out of the box:
 - Conversational and one-shot invocations both supported (`/logtime` or `/logtime RGU-224 30m description`)
 - Division of labor locked in: `track-time.sh` captures implementation (tool-call density); `/logtime` captures thinking/review/discussion/manual-testing — both surface in `/tools` with different `source` values
 
-### 🔜 Remaining
-- **Claude AI on Timesheet** — replace the simulated generation animation with a real Claude call that groups `TimeEntry` rows into a draft timesheet
-- **Claude AI on Alerts** — surface stalled tickets, missed estimates, meeting-heavy days
-- **OAuth for Slack/GitHub/Zoom** — currently paste-token, could move to OAuth following the same pattern as Atlassian
-- **GitHub connector** has a stub schema entry but no real connector class yet
-- **Polish** — loading skeletons, error boundaries, end-to-end tests
-- **Demo prep** — seeded TimeEntry rows + backup demo video
+**Phase 11 — Auto-stop-on-commit + global hook installer:**
+- `scripts/auto-stop-on-commit.sh` — PostToolUse Bash matcher hook. Parses `git commit`/`gh pr create` for a `[A-Z]{2,}-[0-9]+` ticket key; if it matches the active session, runs `track-time.sh log` (stop + push to Jira). Idempotent, ticket-mismatch-safe, exits 0 unconditionally so a parse miss never blocks a tool call.
+- `scripts/install-projectpulse-tracker.sh` — one-shot installer. Copies `track-time.sh` and `auto-stop-on-commit.sh` to `~/.local/share/projectpulse/scripts/`, jq-patches `~/.claude/settings.json` with both PostToolUse hooks (tick on `.*`, auto-stop on `Bash`), writes `~/.config/projectpulse/config`. Idempotent on re-run.
+- `scripts/probe-hook.sh` — diagnostic that logs every Pre/PostToolUse stdin payload to `/tmp/projectpulse-hook-probe.log`. Confirmed Claude Code passes `tool_input.command` on Bash hooks, which is what `auto-stop-on-commit.sh` parses.
+
+**Phase 12 — Per-user scoping + timezone correctness:**
+- **Jira** `fetchTickets` + `fetchActivities` gained a `mineOnly` flag → JQL `(assignee = currentUser() OR reporter = currentUser() OR worklogAuthor = currentUser())`. `/api/detect` and `/api/activities` now opt in so other engineers' tickets stop leaking into Auto-Detected Time / Recent Activity.
+- **Slack** connector resolves the caller's Slack member ID via `users.lookupByEmail` (cached) and filters messages to `msg.user === myId`. Returns `[]` if lookup fails (missing scope or email mismatch) rather than leaking other channel members' messages. Requires the bot token to have `users:read.email`.
+- **Timezone** — new `src/lib/date-range.ts` with `tzToday`, `tzDaysAgo`, `tzDayBoundsUtc`. Replaces every `toISOString().split("T")[0]` pattern (which returned the UTC date and dropped same-day events for users east of UTC). Used by `parseDateRange`, the client `useDateRange` hook, `alerts/generate`, and the Calendar / Zoom / Mavenlink / GitHub / Slack connectors. Default `APP_TIMEZONE=Asia/Kolkata`, overridable via env.
+
+**Phase 13 — AI features + GitHub + Productivity Insights:**
+- **`POST /api/timesheet/generate`** — Claude Sonnet 4.6 (Anthropic SDK) groups `TimeEntry` rows into polished daily logs with a weekly narrative summary. Zod-validated structured output.
+- **`POST /api/alerts/generate`** — Claude analyses Jira tickets + tracked time to flag stalled tickets, missed estimates, scope creep, and velocity risks. Rule-based fallback (same output shape) runs when `ANTHROPIC_API_KEY` is missing, so both pages work without a key.
+- **GitHub connector** — `RealGitHubConnector` hits `/user`, `/user/repos`, `/repos/.../commits`. Commit messages scanned for `[A-Z]+-\d+` and auto-linked to Jira tickets. Wired into `/api/activities`; project filter respects the ticket mapping.
+- **Productivity Insights** — donut chart on the dashboard categorising tracked time (AI-assisted / deep work / meetings / auto-logged / comms / other). Tracked Time card now has All / Drafts / Approved / Logged tabs that reconcile with donut totals (rejected entries excluded).
+- **Jira API hardening** — migrated all `/search` calls to `/search/jql` (the legacy endpoint was retired and returning 410); JQL uses `currentUser()` instead of fragile display-name matching; Activities filtered to the user's assigned projects by default.
+
+### 🔜 Remaining (deferred past demo submission)
+- **Slack workspace admin approval** — blocks turning on real Slack data in the submitted demo. Connector + UI are built; needs an Axelerant Slack admin to approve a Slack App with bot scopes (`channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`, `users:read.email`).
+- **Zoom account-owner approval** — blocks Zoom data in the submitted demo. Connector + UI are built; needs the Axelerant Zoom account owner to approve a Server-to-Server OAuth app with `meeting:read:admin`, `user:read:admin`, `recording:read:admin`.
+- **OAuth for Slack / GitHub / Zoom** — currently paste-token; would mirror the Atlassian 3LO pattern. Not blocking.
+- **Polish** — loading skeletons, error boundaries, end-to-end tests.
+- **Demo prep** — seeded `TimeEntry` rows (deterministic `prisma/seed.ts`) + backup demo video.
 
 ### Locked-in decisions
 - Claude Code time pushes to Jira **as drafts** by default. User approves from `/tools`. Toggle in Settings.
@@ -445,3 +553,8 @@ The app is built to run on Vercel out of the box:
 | `/logtime` says "ProjectPulse is not configured" | Run `./scripts/install-logtime-skill.sh` (use `--force` to overwrite existing config). Restart Claude Code afterward. |
 | `/logtime` returns 401 | The `INTERNAL_API_TOKEN` in `~/.config/projectpulse/config` doesn't match the one in ProjectPulse's `.env`. Re-run the installer or edit the config file by hand. |
 | `/logtime` fails with "could not reach $PROJECTPULSE_API_BASE" | The dev server isn't running. Start it with `npm run dev`. |
+| Auto-stop-on-commit hook never fires after a commit | (a) Claude Code wasn't restarted after running the installer, or (b) you ran `git commit` in your own terminal instead of asking Claude to. Hooks fire on Claude's `Bash` tool, not your shell. Tail `/tmp/projectpulse-auto-stop.log` to see decisions. |
+| Auto-stop hook fires but logs `track-time.sh not found` | Re-run `./scripts/install-projectpulse-tracker.sh`. The hook expects the installed copy at `~/.local/share/projectpulse/scripts/track-time.sh`. |
+| Slack messages disappeared from Recent Activity | Bot token lacks `users:read.email`. The connector now refuses to fan out without it (to avoid leaking other members' messages). Add the scope in Slack app → OAuth & Permissions → reinstall → repaste the new `xoxb-…` in Settings. |
+| Recent Activity shows ticket updates from teammates | Pre-Phase-12 behavior. Pull `main`, redeploy — `mineOnly` JQL is now opt-in by default. |
+| Today's events missing from Auto-Detected Time | Pre-Phase-12 timezone bug. Pull `main`. If `APP_TIMEZONE` isn't set in `.env`, the connector defaults to Asia/Kolkata — set it explicitly if your team is elsewhere. |
