@@ -13,6 +13,7 @@ export interface ActivityConnector extends BaseConnector {
     until?: string;
     projectId?: string;
     projectIds?: string[];
+    mineOnly?: boolean;
   }): Promise<Activity[]>;
 }
 

@@ -6,11 +6,11 @@ import { getGranolaConnector } from "./granola";
 import { getZoomConnector } from "./zoom";
 import { getGithubConnector } from "./github";
 
-export async function getConnectors(userId: string) {
+export async function getConnectors(userId: string, userEmail?: string) {
   const [jira, google_calendar, slack, mavenlink, granola, zoom, github] = await Promise.all([
     getJiraConnector(userId),
     getCalendarConnector(userId),
-    getSlackConnector(userId),
+    getSlackConnector(userId, userEmail),
     getMavenlinkConnector(userId),
     getGranolaConnector(userId),
     getZoomConnector(userId),

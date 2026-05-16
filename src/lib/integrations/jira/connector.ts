@@ -9,6 +9,7 @@ export interface IJiraConnector extends ActivityConnector {
     status?: string[];
     assignee?: string;
     assignedToMe?: boolean;
+    mineOnly?: boolean;
   }): Promise<JiraTicket[]>;
   getTicketEstimate(ticketKey: string): Promise<JiraEstimate | null>;
   getTicketSummary(ticketKey: string): Promise<string | null>;

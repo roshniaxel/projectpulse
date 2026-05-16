@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
   const [jira, calendar, slack, granola, github] = await Promise.all([
     getJiraConnector(user.id),
     getCalendarConnector(user.id),
-    getSlackConnector(user.id),
+    getSlackConnector(user.id, user.email),
     getGranolaConnector(user.id),
     getGithubConnector(user.id),
   ]);
@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
           until: to,
           projectId: project,
           projectIds: userProjectKeys,
+          mineOnly: true,
         }),
         calendar.fetchActivities({ since: from, until: to }),
         slack.fetchActivities({ since: from, until: to }),

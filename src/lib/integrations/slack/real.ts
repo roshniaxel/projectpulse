@@ -1,14 +1,42 @@
 import type { Activity } from "@/lib/types";
 import type { ISlackConnector } from "./connector";
+import { tzDayBoundsUtc } from "@/lib/date-range";
 
-export type SlackCreds = { botToken: string };
+export type SlackCreds = { botToken: string; userEmail?: string };
 
 export class RealSlackConnector implements ISlackConnector {
   readonly source = "slack" as const;
   private botToken: string;
+  private userEmail?: string;
+  // Cached Slack member ID for `userEmail`. `null` = lookup failed (missing
+  // scope, no matching account, etc.) so we don't retry every request.
+  private cachedMyId: string | null | undefined = undefined;
 
   constructor(creds: SlackCreds) {
     this.botToken = creds.botToken;
+    this.userEmail = creds.userEmail;
+  }
+
+  // Resolve the logged-in ProjectPulse user to a Slack member ID via
+  // `users.lookupByEmail`. Requires the bot token to have the
+  // `users:read.email` scope — without it Slack returns missing_scope, in
+  // which case we return null and the caller treats the feed as empty (better
+  // to show nothing than leak other people's messages).
+  private async resolveMyId(): Promise<string | null> {
+    if (this.cachedMyId !== undefined) return this.cachedMyId;
+    if (!this.userEmail) {
+      this.cachedMyId = null;
+      return null;
+    }
+    try {
+      const data = await this.fetch("users.lookupByEmail", {
+        email: this.userEmail,
+      });
+      this.cachedMyId = String((data.user as { id?: string })?.id || "") || null;
+    } catch {
+      this.cachedMyId = null;
+    }
+    return this.cachedMyId;
   }
 
   private async fetch(method: string, params?: Record<string, string>) {
@@ -44,8 +72,19 @@ export class RealSlackConnector implements ISlackConnector {
   }
 
   async fetchActivities(params: { since: string }): Promise<Activity[]> {
+    // Refuse to fan out if we can't tell which messages belong to the logged-in
+    // user. Pre-scoping fix the bot's token would surface every channel
+    // member's messages.
+    const myId = await this.resolveMyId();
+    if (!myId) return [];
+
     const channels = await this.fetchChannels();
-    const oldest = String(new Date(params.since).getTime() / 1000);
+    // Slack `oldest` is a unix-seconds timestamp. Anchor to start-of-day in
+    // the team's TZ, not UTC midnight — otherwise we miss early-morning IST
+    // messages on the `since` day.
+    const oldest = String(
+      new Date(tzDayBoundsUtc(params.since).startUtc).getTime() / 1000
+    );
     const activities: Activity[] = [];
 
     for (const channel of channels.slice(0, 5)) {
@@ -58,6 +97,7 @@ export class RealSlackConnector implements ISlackConnector {
 
         for (const msg of data.messages || []) {
           if (msg.subtype === "bot_message") continue;
+          if (String(msg.user || "") !== myId) continue;
           const text = String(msg.text || "");
           if (text.length < 5) continue;
 

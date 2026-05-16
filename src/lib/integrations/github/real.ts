@@ -1,5 +1,6 @@
 import type { Activity } from "@/lib/types";
 import type { IGitHubConnector } from "./connector";
+import { tzDayBoundsUtc } from "@/lib/date-range";
 
 export type GitHubCreds = { apiToken: string };
 
@@ -89,11 +90,11 @@ export class RealGitHubConnector implements IGitHubConnector {
     // Per-repo limit kept low to bound latency on workspaces with many repos.
     const commitResults = await Promise.allSettled(
       repos.slice(0, 8).map(async (r) => {
-        const sinceIso = new Date(params.since).toISOString();
+        // Interpret since/until as YYYY-MM-DD dates in the team's timezone,
+        // not UTC — see src/lib/date-range.ts.
+        const sinceIso = tzDayBoundsUtc(params.since).startUtc;
         const untilIso = params.until
-          ? new Date(
-              new Date(params.until).getTime() + 24 * 60 * 60 * 1000 - 1
-            ).toISOString()
+          ? tzDayBoundsUtc(params.until).endUtc
           : undefined;
         const qs = new URLSearchParams({
           author: username,

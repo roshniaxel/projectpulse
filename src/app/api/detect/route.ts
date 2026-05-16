@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
 
     const [zoomResult, jiraResult, calendarResult] = await Promise.allSettled([
       zoom.fetchActivities({ since: from, until: to }),
-      jira.fetchTickets({ projectKey: "", status: ["In Progress", "In Review"] }),
+      jira.fetchTickets({ projectKey: "", status: ["In Progress", "In Review"], mineOnly: true }),
       calendar.fetchActivities({ since: from, until: to }),
     ]);
 

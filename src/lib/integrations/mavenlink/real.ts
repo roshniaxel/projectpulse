@@ -1,6 +1,7 @@
 import type { TimeEntry, PushResult } from "@/lib/types";
 import type { IMavenlinkConnector } from "./connector";
 import type { MavenlinkWorkspace, MavenlinkProject } from "./types";
+import { tzToday } from "@/lib/date-range";
 
 export type MavenlinkCreds = {
   accountId: string;
@@ -83,7 +84,7 @@ export class RealMavenlinkConnector implements IMavenlinkConnector {
           method: "POST",
           body: JSON.stringify({
             time_entry: {
-              date_performed: new Date().toISOString().split("T")[0],
+              date_performed: tzToday(),
               time_in_minutes: Math.round(entry.hours * 60),
               notes: `[${entry.ticketKey || "General"}] ${entry.description}`,
               rate_in_cents: 0,

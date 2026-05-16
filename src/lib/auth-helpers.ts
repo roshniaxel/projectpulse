@@ -1,5 +1,6 @@
 import { auth } from "./auth";
 import { prisma } from "./prisma";
+import { tzToday, tzDaysAgo } from "./date-range";
 
 export async function getSessionUser() {
   const session = await auth();
@@ -47,17 +48,14 @@ export async function requireDbUser() {
   return { user: dbUser, unauthorized: null } as const;
 }
 
-// Parse ?from= and ?to= query params into ISO date strings.
-// Defaults: from = 7 days ago, to = today (inclusive).
+// Parse ?from= and ?to= query params into YYYY-MM-DD date strings.
+// Defaults: from = 7 days ago, to = today (inclusive), both in the team's
+// configured timezone (APP_TIMEZONE, default Asia/Kolkata).
 export function parseDateRange(searchParams: URLSearchParams): {
   from: string;
   to: string;
 } {
-  const today = new Date();
-  const sevenDaysAgo = new Date(today);
-  sevenDaysAgo.setDate(today.getDate() - 7);
-
-  const from = searchParams.get("from") || sevenDaysAgo.toISOString().split("T")[0];
-  const to = searchParams.get("to") || today.toISOString().split("T")[0];
+  const from = searchParams.get("from") || tzDaysAgo(7);
+  const to = searchParams.get("to") || tzToday();
   return { from, to };
 }

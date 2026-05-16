@@ -3,14 +3,24 @@
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useCallback, useMemo } from "react";
 
+// Use the browser's local timezone (not UTC) so "today" matches what the user
+// sees on the wall clock. `toISOString().split("T")[0]` returns the UTC date,
+// which rolls over to "yesterday" for any user east of UTC after their local
+// midnight crosses 00:00 UTC.
+function formatLocal(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
 function todayISO(): string {
-  return new Date().toISOString().split("T")[0];
+  return formatLocal(new Date());
 }
 
 function daysAgoISO(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().split("T")[0];
+  return formatLocal(new Date(Date.now() - days * 24 * 60 * 60 * 1000));
 }
 
 export type DateRangePreset = "today" | "week" | "month" | "custom";

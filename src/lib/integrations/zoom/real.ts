@@ -1,5 +1,6 @@
 import type { Activity } from "@/lib/types";
 import type { IZoomConnector, ZoomMeeting } from "./connector";
+import { tzToday } from "@/lib/date-range";
 
 export type ZoomCreds = {
   accountId: string;
@@ -65,7 +66,7 @@ export class RealZoomConnector implements IZoomConnector {
     from: string;
     to?: string;
   }): Promise<ZoomMeeting[]> {
-    const to = params.to || new Date().toISOString().split("T")[0];
+    const to = params.to || tzToday();
     const data = await this.fetch(
       `/users/me/meetings?type=previous_meetings&from=${params.from}&to=${to}&page_size=30`
     );

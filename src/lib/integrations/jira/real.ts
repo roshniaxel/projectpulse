@@ -126,6 +126,7 @@ export class RealJiraConnector implements IJiraConnector {
     status?: string[];
     assignee?: string;
     assignedToMe?: boolean;
+    mineOnly?: boolean;
   }): Promise<JiraTicket[]> {
     let jql = params.projectKey ? `project = "${params.projectKey}"` : "";
     if (params.status?.length) {
@@ -139,6 +140,13 @@ export class RealJiraConnector implements IJiraConnector {
       jql += jql ? ` AND assignee = currentUser()` : `assignee = currentUser()`;
     } else if (params.assignee) {
       jql += jql ? ` AND assignee = "${params.assignee}"` : `assignee = "${params.assignee}"`;
+    }
+    // "Mine" = either currently assigned OR has my worklogs. Keeps historical
+    // worked-on tickets even after they're reassigned, while excluding
+    // tickets I've never touched but happen to be in-progress in the workspace.
+    if (params.mineOnly) {
+      const mine = "(assignee = currentUser() OR worklogAuthor = currentUser())";
+      jql += jql ? ` AND ${mine}` : mine;
     }
     jql += " ORDER BY updated DESC";
 
@@ -207,6 +215,7 @@ export class RealJiraConnector implements IJiraConnector {
     until?: string;
     projectId?: string;
     projectIds?: string[];
+    mineOnly?: boolean;
   }): Promise<Activity[]> {
     let jql = `updated >= "${params.since}"`;
     if (params.until) jql += ` AND updated <= "${params.until}"`;
@@ -215,6 +224,13 @@ export class RealJiraConnector implements IJiraConnector {
     } else if (params.projectIds && params.projectIds.length > 0) {
       const list = params.projectIds.map((k) => `"${k}"`).join(",");
       jql += ` AND project IN (${list})`;
+    }
+    // Restrict to tickets the current user actually has a stake in — assignee,
+    // reporter, or has logged worklog time. Otherwise activity feeds leak
+    // teammates' ticket updates from any project we share with them.
+    if (params.mineOnly) {
+      jql +=
+        " AND (assignee = currentUser() OR reporter = currentUser() OR worklogAuthor = currentUser())";
     }
     jql += " ORDER BY updated DESC";
 

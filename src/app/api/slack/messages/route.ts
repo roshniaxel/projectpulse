@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const { from, to } = parseDateRange(request.nextUrl.searchParams);
 
   try {
-    const connector = await getSlackConnector(user.id);
+    const connector = await getSlackConnector(user.id, user.email);
     const activities = await connector.fetchActivities({ since: from, until: to });
     return Response.json({ activities });
   } catch (error) {

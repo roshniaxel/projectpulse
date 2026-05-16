@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { prisma } from "@/lib/prisma";
 import { requireDbUser, parseDateRange } from "@/lib/auth-helpers";
+import { tzToday } from "@/lib/date-range";
 import { getJiraConnector } from "@/lib/integrations/jira";
 import { detectAlerts } from "@/lib/alerts/rule-engine";
 
@@ -185,7 +186,7 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = tzToday();
   const userPrompt = `Today's date: ${today}
 Analysis period: ${from} → ${to}
 Engineer: ${user.email}

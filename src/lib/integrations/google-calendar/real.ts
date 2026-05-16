@@ -1,6 +1,7 @@
 import type { Activity } from "@/lib/types";
 import type { ICalendarConnector } from "./connector";
 import { updateAccessToken } from "@/lib/integration-credentials";
+import { tzDayBoundsUtc } from "@/lib/date-range";
 
 export type CalendarCreds = {
   userId: string;
@@ -77,10 +78,12 @@ export class RealCalendarConnector implements ICalendarConnector {
     since: string;
     until?: string;
   }): Promise<Activity[]> {
-    const timeMin = new Date(params.since).toISOString();
-    const timeMax = params.until
-      ? new Date(params.until).toISOString()
-      : new Date(params.since + "T23:59:59Z").toISOString();
+    // Interpret `since` / `until` as YYYY-MM-DD dates in the team's timezone
+    // (see src/lib/date-range.ts). The earlier patch used UTC end-of-day, which
+    // both clipped early-morning IST events on the start date and leaked
+    // very-early next-IST-day events past the end date.
+    const { startUtc: timeMin } = tzDayBoundsUtc(params.since);
+    const { endUtc: timeMax } = tzDayBoundsUtc(params.until || params.since);
 
     const res = await this.authedFetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=50`
